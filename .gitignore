@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# Test / tooling
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Axon runtime state (may reference discovered providers — never commit)
+*.local.yaml
+axon.config.local.*
+.axon/
+
+# Secrets — never commit
+.env
+.env.*
+*.key
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
