@@ -12,7 +12,9 @@ Premium models are great but expensive, and you don't need them for search or su
 
 ## Status
 
-Early development. **M0 — the discovery engine** is complete: it scans environment variables (process + Windows registry) and a fixed allowlist of config files, detects each key's provider (base_url first, then key prefix, then env var name), and validates with a zero-cost probe — never exposing a key value.
+Early development.
+
+**M0 — discovery engine** (done): scans environment variables (process + Windows registry) and a fixed allowlist of config files, detects each key's provider (base_url first, then key prefix, then env var name), and validates with a zero-cost probe — never exposing a key value.
 
 ```bash
 pip install -e .
@@ -20,10 +22,22 @@ axon scan              # discover configured providers (fingerprints only)
 axon scan --validate   # also probe which keys authenticate
 ```
 
+**M1 — dual-ingress gateway** (done): serves both an OpenAI-compatible and an Anthropic-compatible API over the providers it discovered, so any OpenAI *or* Anthropic SDK (including Claude Code) works by pointing its base_url at Axon. Egress is routed through LiteLLM. Currently serves OpenAI + Anthropic.
+
+```bash
+pip install -e ".[server]"
+axon serve                       # binds 127.0.0.1:4000 by default
+
+# OpenAI SDK:    base_url=http://127.0.0.1:4000/v1   model="gpt-4o"
+# Anthropic SDK: base_url=http://127.0.0.1:4000      model="claude-sonnet-4-6"
+```
+
+Endpoints: `POST /v1/chat/completions`, `GET /v1/models` (OpenAI), `POST /v1/messages` (Anthropic), `GET /healthz`. All support streaming.
+
 ## Architecture
 
 - **Discovery engine** (M0, done) — the wedge. Read-only, consent-gated scan of env vars, the Windows registry, `.env` files, and tool config files (`~/.claude`, `~/.aider.conf.yml`, `~/.continue`, Cursor's `state.vscdb`).
-- **Fused endpoint** (M1) — LiteLLM as the provider engine behind an OpenAI-compatible `/v1`.
+- **Fused endpoint** (M1, done) — LiteLLM as the provider engine behind dual OpenAI- and Anthropic-compatible ingresses.
 - **Router** (M2) — static role-based routing for v1. Smart cheap-first cascade is a fast-follow.
 - **Dashboard** (M3) — "Active Models" view + discovery cards + cost stats.
 

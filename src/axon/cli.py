@@ -161,5 +161,103 @@ def version() -> None:
     console.print(f"axon {__version__}")
 
 
+_LOCALHOST = {"127.0.0.1", "::1", "localhost"}
+
+
+@app.command()
+def serve(
+    host: str = typer.Option(
+        "127.0.0.1",
+        "--host",
+        help="Bind address. Defaults to localhost. Binding a non-localhost "
+        "address requires AXON_API_KEY (the endpoint holds your provider keys).",
+    ),
+    port: int = typer.Option(4000, "--port", "-p", help="Port to listen on."),
+    no_config_files: bool = typer.Option(
+        False,
+        "--no-config-files",
+        help="Build the credential vault from environment variables only.",
+    ),
+) -> None:
+    """Start the dual-ingress gateway (OpenAI + Anthropic compatible).
+
+    Discovers your configured OpenAI/Anthropic keys, holds them in memory, and
+    serves POST /v1/chat/completions, GET /v1/models, and POST /v1/messages.
+    """
+    import os
+
+    import uvicorn
+
+    from .registry import build_vault
+    from .server.app import create_app
+
+    # Security gate: a key-holding endpoint must not be exposed unauthenticated.
+    is_local = host in _LOCALHOST
+    if not is_local and not os.environ.get("AXON_API_KEY"):
+        console.print(
+            f"[red]Refusing to bind {host} without AXON_API_KEY.[/red]\n"
+            "This endpoint holds your provider API keys; an open bind would let "
+            "anyone on the network use them. Set AXON_API_KEY to require an "
+            "inbound key, or bind 127.0.0.1 (default)."
+        )
+        raise typer.Exit(code=2)
+
+    vault = build_vault(include_config_files=not no_config_files)
+    if len(vault) == 0:
+        console.print(
+            "[yellow]No OpenAI/Anthropic keys discovered.[/yellow] "
+            "Run [bold]axon scan[/bold] to see what's detectable, then set a key "
+            "(e.g. OPENAI_API_KEY / ANTHROPIC_API_KEY)."
+        )
+        raise typer.Exit(code=1)
+
+    console.print(f"[bold]Axon[/bold] serving on http://{host}:{port}")
+    from .providers import PROVIDERS_BY_ID
+
+    for pid in vault.providers():
+        cred = vault.get(pid)
+        fp = cred.discovery.fingerprint.display() if cred.discovery else ""
+        spec = PROVIDERS_BY_ID.get(pid)
+        default_base = spec.default_base_url if spec else None
+        endpoint = cred.base_url or default_base or "(provider default)"
+        console.print(f"  [cyan]{pid}[/cyan]  {fp}  -> [dim]{endpoint}[/dim]")
+        # Warn loudly: your real key will be sent to this endpoint. A custom or
+        # non-https base_url (possibly from an untrusted config file) is exactly
+        # how a poisoned config could exfiltrate the key.
+        if cred.base_url and default_base and cred.base_url.rstrip("/") != default_base.rstrip("/"):
+            console.print(
+                f"    [yellow]! custom endpoint for {pid} (not the provider default). "
+                f"Your {pid} key will be sent here.[/yellow]"
+            )
+        if cred.base_url and cred.base_url.lower().startswith("http://"):
+            console.print(
+                f"    [red]! INSECURE: {pid} endpoint is http:// — the key is sent "
+                f"in cleartext.[/red]"
+            )
+    console.print(
+        "  [dim]OpenAI:    POST /v1/chat/completions, GET /v1/models[/dim]\n"
+        "  [dim]Anthropic: POST /v1/messages[/dim]"
+    )
+    # Warn when a second credential for an already-loaded provider was dropped —
+    # e.g. a stale env key shadowing a valid config-file key (first-wins order).
+    for shadow in vault.shadowed:
+        active = vault.get(shadow.provider_id)
+        active_src = (
+            active.discovery.source.value if active and active.discovery else "?"
+        )
+        shadow_src = shadow.discovery.source.value if shadow.discovery else "?"
+        console.print(
+            f"  [yellow]! {shadow.provider_id}: a second credential from "
+            f"{shadow_src} was ignored (using the one from {active_src}). "
+            f"Run [bold]axon scan[/bold] to compare.[/yellow]"
+        )
+    if os.environ.get("AXON_API_KEY"):
+        console.print("  [dim]Inbound auth: required (AXON_API_KEY set)[/dim]")
+    elif is_local:
+        console.print("  [dim]Inbound auth: none (localhost only)[/dim]")
+
+    uvicorn.run(create_app(vault), host=host, port=port, log_level="info")
+
+
 if __name__ == "__main__":
     app()
